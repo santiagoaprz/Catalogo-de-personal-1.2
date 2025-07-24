@@ -11,6 +11,10 @@ $secuencia_result = mysqli_query($conn, $secuencia_query);
 if ($secuencia_row = mysqli_fetch_assoc($secuencia_result)) {
     $proximo_numero = $secuencia_row['ultimo_numero'] + 1;
     $numero_oficio = "OF-" . str_pad($proximo_numero, 5, '0', STR_PAD_LEFT);
+    $numero_oficio_usuario = mysqli_real_escape_string($conn, $_POST['numero_oficio_usuario']); 
+
+
+    
 }
 
 // Verificar autenticación
@@ -24,8 +28,9 @@ $query = "SELECT
     d.id,
     d.numero_oficio,
     d.fecha_creacion,
+    d.numero_oficio_usuario,
     d.fecha_entrega,
-    d.remitente,
+     IFNULL(cp.nombre, d.remitente) AS remitente,
     d.numero_empleado,
     d.jud_destino,
     d.asunto,
@@ -385,7 +390,7 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                 <div class="form-grid">
                 <div class="form-group">
                         <label for="fecha_creacion">Fecha de creacion del oficio</label>
-                        <input type="date" id="fecha_creacion" name="fecha_creacion" required> value="<?= date('Y-m-d\TH:i') ?>">
+                        <input type="date" id="fecha_creacion" name="fecha_creacion" required> <value="<?= date('Y-m-d\TH:i') ?>">
                     </div>    
                 
                 <div class="form-group">
@@ -394,12 +399,9 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                     </div>
                     
                     <div class="form-group">
-                        <label for="numero_oficio">Número de Oficio</label>
-                        <input type="text" id="numero_oficio" name="numero_oficio" 
-                               value="<?= htmlspecialchars($numero_oficio) ?>" 
-                               readonly required
-                               class="campo-numero-oficio">
-                    </div>
+    <label for="numero_oficio_usuario">Oficio :</label>
+    <input type="text" class="form-control" id="numero_oficio_usuario" name="numero_oficio_usuario" required>
+</div>
                     
                     <div class="form-group">
                         <label for="remitente">Remitente</label>
@@ -485,6 +487,11 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                         <label for="telefono">Teléfono</label>
                         <input type="tel" id="telefono" name="telefono" required>
                     </div>
+
+                    <div class="form-group">
+    <label for="extension">Extensión</label>
+    <input type="text" id="extension" name="extension" pattern="[0-9]{1,5}" title="Solo números, máximo 5 dígitos">
+</div>
                     
                     <div class="form-group">
                         <label for="pdf_file">Subir PDF</label>
@@ -503,7 +510,8 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                 <table>
                     <thead>
                         <tr>
-                            <th>N° Oficio</th>
+                            
+                             <th>Num de oficio</th>   
                             <th>Remitente</th>
                             <th>N° Empleado</th>
                             <th>Depto Destino</th>
@@ -517,7 +525,8 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                     <tbody>
                         <?php while ($row = mysqli_fetch_assoc($result)): ?>
                         <tr>
-                            <td><?= htmlspecialchars($row['numero_oficio']) ?></td>
+                        
+                        <td><?= htmlspecialchars($row['numero_oficio_usuario']) ?></td>
                             <td><?= htmlspecialchars($row['remitente']) ?></td>
                             <td><?= htmlspecialchars($row['numero_empleado']) ?></td>
                             <td><?= htmlspecialchars($row['jud_destino']) ?></td>

@@ -4,16 +4,30 @@ require 'auth_middleware.php';
 requireAuth();
 require 'database.php';
 
-// Aumentamos el límite de GROUP_CONCAT
+// Configuración para GROUP_CONCAT
 mysqli_query($conn, "SET SESSION group_concat_max_len = 1000000;");
 
-// Consulta optimizada para el catálogo de personal
+// Consulta principal para el listado de personal con historial
 $query = "SELECT 
     cp.numero_empleado,
     cp.nombre,
     cp.puesto,
     cp.departamento_jud AS departamento_actual,
-    COUNT(d.id) AS total_documentos
+    cp.telefono,
+    IFNULL(cp.extension, '') AS extension,
+    COUNT(d.id) AS total_documentos,
+    (
+       SELECT GROUP_CONCAT(
+            DISTINCT CONCAT(
+                DATE_FORMAT(h.fecha_cambio, '%d/%m/%Y'), ': ',
+                h.departamento_anterior, ' → ', h.departamento_nuevo
+            )
+            ORDER BY h.fecha_cambio DESC 
+            SEPARATOR ' | '
+        ) 
+        FROM historial_departamentos h 
+        WHERE h.numero_empleado = cp.numero_empleado
+    ) AS historial_deptos
 FROM catalogo_personal cp
 LEFT JOIN documentos d ON cp.numero_empleado = d.numero_empleado
 GROUP BY cp.numero_empleado
@@ -75,15 +89,6 @@ if (!$result) {
         tr:hover {
             background-color: #f1f1f1;
         }
-        .historial {
-            max-width: 300px;
-            white-space: normal;
-            font-size: 0.9em;
-        }
-        .depto-actual {
-            font-weight: bold;
-            color: #5D2E36;
-        }
         .btn {
             display: inline-block;
             background-color: #5D2E36;
@@ -97,13 +102,15 @@ if (!$result) {
         .btn:hover {
             background-color: #722F37;
         }
-        .action-link {
-            color: #5D2E36;
-            text-decoration: none;
-            margin-right: 10px;
+        .historial-cell {
+            max-width: 300px;
+            white-space: normal;
+            font-size: 0.85em;
+            line-height: 1.4;
         }
-        .action-link:hover {
-            text-decoration: underline;
+        .depto-actual {
+            font-weight: bold;
+            color: #5D2E36;
         }
         .document-count {
             background-color: #5D2E36;
@@ -112,10 +119,19 @@ if (!$result) {
             border-radius: 10px;
             font-size: 0.8em;
         }
+        .historial-item {
+            margin-bottom: 5px;
+            padding: 3px;
+            background-color: #f0f0f0;
+            border-radius: 3px;
+        }
         @media (max-width: 768px) {
             table {
                 display: block;
                 overflow-x: auto;
+            }
+            .historial-cell {
+                max-width: 200px;
             }
         }
     </style>
@@ -123,7 +139,7 @@ if (!$result) {
 <body>
     <div class="container">
         <h1>Catálogo de Personal</h1>
-        <h2>Relación de Personal con Historial de Departamentos JUD</h2>
+        <h2>Relación de Personal con Historial de Departamentos</h2>
         
         <a href="nuevo_personal.php" class="btn">➕ Agregar Nuevo Personal</a>
         
@@ -133,10 +149,11 @@ if (!$result) {
                     <th>N° Empleado</th>
                     <th>Nombre</th>
                     <th>Puesto</th>
-                    <th>Departamento Actual</th>
-                    <th>Historial de Departamentos</th>
+                    <th>Depto. Actual</th>
+                    <th>Teléfono</th>
+                    <th>Extensión</th>
                     <th>Documentos</th>
-                    <th>Acciones</th>
+                    <th>Historial de Departamentos</th>
                 </tr>
             </thead>
             <tbody>
@@ -145,54 +162,26 @@ if (!$result) {
                     <td><?= htmlspecialchars($row['numero_empleado']) ?></td>
                     <td><?= htmlspecialchars($row['nombre']) ?></td>
                     <td><?= htmlspecialchars($row['puesto']) ?></td>
-                    <td><?= htmlspecialchars($row['departamento_actual']) ?></td>
-                    <td class="historial">
-                        <?php 
-                        if (!empty($row['historial_deptos']) && $row['historial_deptos'] != 'Sin historial') {
-                            echo str_replace('→', '<br>→', htmlspecialchars($row['historial_deptos']));
-                        } else {
-                            echo 'Sin historial registrado';
-                        }
-                        ?>
-                    </td>
-                    <td><?= $row['total_documentos'] ?></td>
-                    <td>
-                        <!-- Botones de acciones -->
+                    <td class="depto-actual"><?= htmlspecialchars($row['departamento_actual']) ?></td>
+                    <td><?= htmlspecialchars($row['telefono']) ?></td>
+                    <td><?= htmlspecialchars($row['extension']) ?></td>
+                    <td><span class="document-count"><?= $row['total_documentos'] ?></span></td>
+                    <td class="historial-cell">
+                        <?php if (!empty($row['historial_deptos'])): ?>
+                            <?php 
+                            $historial_items = explode(' | ', $row['historial_deptos']);
+                            foreach ($historial_items as $item): 
+                            ?>
+                                <div class="historial-item"><?= htmlspecialchars($item) ?></div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            Sin historial registrado
+                        <?php endif; ?>
                     </td>
                 </tr>
                 <?php endwhile; ?>
             </tbody>
         </table>
     </div>
-
-    <script>
-    // Función para actualizar departamento via AJAX
-    function actualizarDepartamento(idPersonal, nuevoDepto) {
-        if (confirm(`¿Cambiar departamento a ${nuevoDepto}?`)) {
-            fetch('actualizar_departamento.php', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    id: idPersonal,
-                    departamento: nuevoDepto
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert('Departamento actualizado correctamente');
-                    location.reload();
-                } else {
-                    alert('Error: ' + data.message);
-                }
-            })
-            .catch(error => {
-                alert('Error en la conexión: ' + error);
-            });
-        }
-    }
-    </script>
 </body>
 </html>

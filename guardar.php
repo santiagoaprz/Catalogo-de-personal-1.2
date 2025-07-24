@@ -46,6 +46,7 @@ try {
     $cargo_remitente = $_POST['cargo_remitente'];
     $depto_remitente = ($_POST['depto_remitente'] === 'OTRO') ? trim($_POST['depto_remitente_otro']) : trim($_POST['depto_remitente']);
     $telefono = $_POST['telefono'];
+    $extension = $_POST['extension'] ?? '';
     $asunto = $_POST['asunto'];
     $tipo = $_POST['tipo'];
     $estatus = $_POST['estatus'];
@@ -53,6 +54,7 @@ try {
     $destinatario = $_POST['trabajador_destino'] ?? '';
     $dire_fisica = $_POST['dire_fisica'];
     $usuario_id = $_SESSION['user']['id'];
+    $numero_oficio_usuario = trim($_POST['numero_oficio_usuario']);
 
     // ===== PROCESAMIENTO DEL PDF =====
     if (!is_uploaded_file($_FILES['pdf_file']['tmp_name'])) {
@@ -93,53 +95,85 @@ error_log("URL accesible: http://localhost/SISTEMA_OFICIOS/" . $pdf_path);
 
     // ===== GESTIÓN DE EMPLEADOS =====
     $check_query = "SELECT departamento_jud FROM catalogo_personal WHERE numero_empleado = ? LIMIT 1";
-    $stmt_check = $conn->prepare($check_query);
-    $stmt_check->bind_param('s', $numero_empleado);
-    $stmt_check->execute();
-    $empleado = $stmt_check->get_result()->fetch_assoc();
+$stmt_check = $conn->prepare($check_query);
+$stmt_check->bind_param('s', $numero_empleado);
+$stmt_check->execute();
+$empleado = $stmt_check->get_result()->fetch_assoc();
 
-    if ($empleado) {
-        // Empleado existente - actualizar departamento si cambió
-        $depto_actual = $empleado['departamento_jud'];
-        if ($depto_actual !== $depto_remitente) {
-            $update_query = "UPDATE catalogo_personal SET 
-                departamento_jud = ?,
-                ultima_actualizacion = CURRENT_TIMESTAMP
-                WHERE numero_empleado = ?";
-            $stmt_update = $conn->prepare($update_query);
-            $stmt_update->bind_param('ss', $depto_remitente, $numero_empleado);
-            $stmt_update->execute();
-        }
-    } else {
-        // Nuevo empleado - insertar en catalogo_personal
-        $insert_query = "INSERT INTO catalogo_personal 
-            (numero_empleado, nombre, puesto, departamento_jud, dire_fisica, telefono) 
-            VALUES (?, ?, ?, ?, ?, ?)";
-        $stmt_insert = $conn->prepare($insert_query);
-        $stmt_insert->bind_param('ssssss', 
-            $numero_empleado,
-            $remitente,
-            $cargo_remitente,
-            $depto_remitente,
-            $dire_fisica,
-            $telefono
-        );
-        $stmt_insert->execute();
+if ($empleado) {
+    // Empleado existente - actualizar departamento si cambió
+    $depto_actual = $empleado['departamento_jud'];
+    if ($depto_actual !== $depto_remitente) {
+        // Guardar historial antes de actualizar
+        $historial_query = "INSERT INTO historial_departamentos 
+            (numero_empleado, departamento_jud) 
+            VALUES (?, ?)";
+        $stmt_historial = $conn->prepare($historial_query);
+        $stmt_historial->bind_param('ss', $numero_empleado, $depto_actual);
+        $stmt_historial->execute();
+
+        // Registrar el cambio en historial_departamentos
+$historial_query = "INSERT INTO historial_departamentos (
+    numero_empleado, 
+    departamento_anterior, 
+    departamento_nuevo, 
+    usuario_registra,
+    numero_oficio_usuario
+) VALUES (?, ?, ?, ?, ?)";
+
+$stmt_historial = $conn->prepare($historial_query);
+$stmt_historial->bind_param('sssis', 
+    $numero_empleado,
+    $empleado ? $empleado['departamento_jud'] : 'Nuevo ingreso',
+    $depto_remitente,
+    $usuario_id,
+    $numero_oficio_usuario
+);
+$stmt_historial->execute();
+
+        // Actualizar departamento
+        $update_query = "UPDATE catalogo_personal SET 
+            departamento_jud = ?,
+            telefono = ?,
+            extension = ?,
+            ultima_actualizacion = CURRENT_TIMESTAMP
+            WHERE numero_empleado = ?";
+        $stmt_update = $conn->prepare($update_query);
+        $stmt_update->bind_param('ssss', $depto_remitente, $telefono, $extension, $numero_empleado);
+        $stmt_update->execute();
     }
+} else {
+    // Nuevo empleado - insertar en catalogo_personal
+    $insert_query = "INSERT INTO catalogo_personal 
+        (numero_empleado, nombre, puesto, departamento_jud, dire_fisica, telefono, extension) 
+        VALUES (?, ?, ?, ?, ?, ?, ?)";
+    $stmt_insert = $conn->prepare($insert_query);
+    $stmt_insert->bind_param('sssssss', 
+        $numero_empleado,
+        $remitente,
+        $cargo_remitente,
+        $depto_remitente,
+        $dire_fisica,
+        $telefono,
+        $extension
+    );
+    $stmt_insert->execute();
+}
 
     // ===== INSERCIÓN DEL DOCUMENTO =====
     $insert_doc_query = "INSERT INTO documentos (
-        fecha_entrega, numero_oficio, remitente, cargo_remitente, 
+        fecha_entrega, numero_oficio, numero_oficio_usuario, remitente, cargo_remitente, 
         depto_remitente, telefono, asunto, tipo, estatus, 
         pdf_url, destinatario, jud_destino, numero_empleado,
         dire_fisica, usuario_registra, etapa
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     
     $stmt_doc = $conn->prepare($insert_doc_query);
-    $stmt_doc->bind_param('ssssssssssssssis',
+    $stmt_doc->bind_param('sssssssssssssssis',
         $fecha_entrega,
         $numero_oficio,
-        $remitente,
+        $numero_oficio_usuario,  // Número capturado por el usuario
+        $remitente,              // Nombre del remitente
         $cargo_remitente,
         $depto_remitente,
         $telefono,
@@ -158,6 +192,34 @@ error_log("URL accesible: http://localhost/SISTEMA_OFICIOS/" . $pdf_path);
     if (!$stmt_doc->execute()) {
         throw new Exception("Error al guardar documento: ".$stmt_doc->error);
     }
+
+
+// ===== REGISTRO EN AUDITORÍA =====
+$accion = 'CREACION_OFICIO';
+$ip_address = $_SERVER['REMOTE_ADDR'];
+$user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Desconocido';
+
+$auditoria_query = "INSERT INTO auditoria_oficios (
+    usuario_id,
+    accion,
+    numero_oficio,
+    numero_oficio_usuario,
+    ip_address,
+    user_agent
+) VALUES (?, ?, ?, ?, ?, ?)";
+
+$stmt_auditoria = $conn->prepare($auditoria_query);
+$stmt_auditoria->bind_param('isssss', 
+    $usuario_id,
+    $accion,
+    $numero_oficio,
+    $numero_oficio_usuario,
+    $ip_address,
+    $user_agent
+);
+$stmt_auditoria->execute();
+
+
 
     mysqli_query($conn, "UNLOCK TABLES");
     $conn->commit();

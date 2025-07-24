@@ -8,14 +8,14 @@ header("Cache-Control: no-cache, no-store, must-revalidate");
 header("Pragma: no-cache");
 header("Expires: 0");
 
-
 // Consulta mejorada con más información
 $query = "SELECT 
     d.id, 
     d.numero_oficio,
+    d.numero_oficio_usuario,
     d.remitente,
     d.numero_empleado,
-     IFNULL(cp.nombre, d.remitente) AS nombre_empleado, 
+    IFNULL(cp.nombre, d.remitente) AS nombre_empleado, 
     d.asunto, 
     d.tipo,
     d.jud_destino,
@@ -87,45 +87,44 @@ if (!$result) {
         <h2>Historial Completo de Documentos</h2>
         
         <table>
-    <thead>
-        <tr>
-            <th>N° Oficio</th>
-            <th>Remitente</th>
-            <th>N° Empleado</th>
-            <th>Nombre Empleado</th>
-            <th>Jud Destino</th>
-            <th>Asunto</th>
-            <th>Tipo</th>
-            <th>Estatus</th>
-            <th>Fecha Entrega</th>
-            <th>Usuario</th>
-            <th>PDF</th>
-        </tr>
-    </thead>
-    <tbody>
-        <?php while ($row = mysqli_fetch_assoc($result)): ?>
-        <tr>
-            <td><?= htmlspecialchars($row['numero_oficio']) ?></td>
-            <td><?= htmlspecialchars($row['remitente']) ?></td>
-            <td><?= htmlspecialchars($row['numero_empleado']) ?></td>
-            <td><?= htmlspecialchars($row['nombre_empleado'] ?? 'N/A') ?></td>
-            <td><?= htmlspecialchars($row['jud_destino']) ?></td>
-            <td><?= htmlspecialchars(substr($row['asunto'], 0, 50)) ?>...</td>
-            <td><?= htmlspecialchars($row['tipo']) ?></td>
-            <td><?= htmlspecialchars($row['estatus']) ?></td>
-            <td><?= htmlspecialchars($row['fecha_entrega']) ?></td>
-            <td><?= htmlspecialchars($row['usuario_registro']) ?></td>
-            <td>
-                <?php if (!empty($row['pdf_url'])): ?>
-                    <a href="<?= htmlspecialchars($row['pdf_url']) ?>" target="_blank">📄</a>
-                <?php else: ?>
-                    <span>No disponible</span>
-                <?php endif; ?>
-            </td>
-        </tr>
-        <?php endwhile; ?>
-    </tbody>
-</table>
+            <thead>
+                <tr>
+                    <th>Oficio</th>
+                    <th>Remitente</th>
+                    <th>N° Empleado</th>
+                  
+                    <th>Jud Destino</th>
+                    <th>Asunto</th>
+                    <th>Tipo</th>
+                    <th>Estatus</th>
+                    <th>Fecha Entrega</th>
+                    <th>Usuario</th>
+                    <th>PDF</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php while ($row = mysqli_fetch_assoc($result)): ?>
+                <tr>
+                    <td><?= htmlspecialchars($row['numero_oficio_usuario'] ?? 'N/A') ?></td>
+                    <td><?= htmlspecialchars($row['remitente']) ?></td>
+                    <td><?= htmlspecialchars($row['numero_empleado']) ?></td>
+                    <td><?= htmlspecialchars($row['jud_destino']) ?></td>
+                    <td><?= htmlspecialchars(substr($row['asunto'], 0, 50)) ?>...</td>
+                    <td><?= htmlspecialchars($row['tipo']) ?></td>
+                    <td><?= htmlspecialchars($row['estatus']) ?></td>
+                    <td><?= htmlspecialchars($row['fecha_entrega']) ?></td>
+                    <td><?= htmlspecialchars($row['usuario_registro']) ?></td>
+                    <td>
+                        <?php if (!empty($row['pdf_url'])): ?>
+                            <a href="<?= htmlspecialchars($row['pdf_url']) ?>" target="_blank" class="pdf-link">📄</a>
+                        <?php else: ?>
+                            <span>No disponible</span>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+                <?php endwhile; ?>
+            </tbody>
+        </table>
     </div>
 </body>
 </html>
