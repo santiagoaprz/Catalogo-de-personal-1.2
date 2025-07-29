@@ -118,19 +118,19 @@ register_shutdown_function(function() {
 });
 
 //funcion de validacion 
-function validarNumeroEmpleado($conn, $numero_empleado) {
-    $numero = trim($numero_empleado);
-    if (empty($numero)) return false;
-    
-    // Verificar formato
-    if (!preg_match('/^[A-Za-z0-9\-]+$/', $numero)) return false;
-    
-    // Verificar que no exista con diferente formato
-    $query = "SELECT numero_empleado FROM catalogo_personal 
-              WHERE REPLACE(numero_empleado, '-', '') = REPLACE(?, '-', '')";
-    $stmt = mysqli_prepare($conn, $query);
-    mysqli_stmt_bind_param($stmt, 's', $numero);
-    mysqli_stmt_execute($stmt);
-    
-    return (mysqli_stmt_fetch($stmt)) ? true : false;
+if (!function_exists('validarNumeroEmpleado')) {
+    function validarNumeroEmpleado($conn, $email_institucional) {
+        $email = trim($email_institucional);
+        if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return false;
+        }
+        
+        $query = "SELECT 1 FROM catalogo_personal WHERE email_institucional = ? LIMIT 1";
+        $stmt = mysqli_prepare($conn, $query);
+        mysqli_stmt_bind_param($stmt, 's', $email);
+        mysqli_stmt_execute($stmt);
+        mysqli_stmt_store_result($stmt);
+        
+        return (mysqli_stmt_num_rows($stmt) > 0);
+    }
 }

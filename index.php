@@ -1,4 +1,12 @@
 <?php
+// Evitar que la conexión se cierre prematuramente
+register_shutdown_function(function() {
+    global $conn;
+    if (isset($conn)) {
+        $conn = null; // Limpiar sin cerrar explícitamente
+    }
+});
+
 require 'session_config.php';
 require 'auth_middleware.php';
 requireAuth();
@@ -11,10 +19,11 @@ $secuencia_result = mysqli_query($conn, $secuencia_query);
 if ($secuencia_row = mysqli_fetch_assoc($secuencia_result)) {
     $proximo_numero = $secuencia_row['ultimo_numero'] + 1;
     $numero_oficio = "OF-" . str_pad($proximo_numero, 5, '0', STR_PAD_LEFT);
-    $numero_oficio_usuario = mysqli_real_escape_string($conn, $_POST['numero_oficio_usuario']); 
+    $numero_oficio_usuario = mysqli_real_escape_string($conn, $_POST['numero_oficio_usuario'] ?? ''); 
+}
 
-
-    
+function generarNumeroAutomatico() {
+    return 'EMP-' . str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
 }
 
 // Verificar autenticación
@@ -27,20 +36,28 @@ if (!isset($_SESSION['user'])) {
 $query = "SELECT 
     d.id,
     d.numero_oficio,
-    d.fecha_creacion,
-    d.numero_oficio_usuario,
-    d.fecha_entrega,
-     IFNULL(cp.nombre, d.remitente) AS remitente,
-    d.numero_empleado,
+    COALESCE(d.numero_oficio_usuario, d.numero_oficio) AS numero_oficio_mostrar,
+    DATE_FORMAT(d.fecha_creacion, '%d/%m/%Y %H:%i') AS fecha_creacion_format,
+    DATE_FORMAT(d.fecha_entrega, '%d/%m/%Y') AS fecha_entrega_format,
+    d.remitente,
+    COALESCE(d.email_institucional, 'No especificado') AS email_institucional,
     d.jud_destino,
     d.asunto,
     d.tipo,
     d.estatus,
     CONCAT('http://', 'localhost/SISTEMA_OFICIOS/', d.pdf_url) AS pdf_url_completo,
-    IFNULL(cp.nombre, d.remitente) AS nombre_empleado
+    u.username AS registrado_por
 FROM documentos d
-LEFT JOIN catalogo_personal cp ON TRIM(d.numero_empleado) = TRIM(cp.numero_empleado)
-ORDER BY d.id DESC LIMIT 50";
+LEFT JOIN usuarios u ON d.usuario_registra = u.id
+WHERE d.remitente IS NOT NULL
+ORDER BY d.fecha_creacion DESC, d.id DESC
+LIMIT 50";
+
+$result = mysqli_query($conn, $query);
+
+if (!$result) {
+    die("Error en la consulta: " . mysqli_error($conn));
+}
 
 $result = mysqli_query($conn, $query);
 
@@ -266,7 +283,7 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
         td:nth-child(2), th:nth-child(2) { width: 7%; }  /* Fecha Creación */
         td:nth-child(3), th:nth-child(3) { width: 7%; }  /* Fecha Entrega */
         td:nth-child(4), th:nth-child(4) { width: 10%; } /* Remitente */
-        td:nth-child(5), th:nth-child(5) { width: 7%; }  /* N° Empleado */
+        td:nth-child(5), th:nth-child(5) { width: 15%; } /* Correo Institucional */
         td:nth-child(6), th:nth-child(6) { width: 12%; } /* JUD Destino */
         td:nth-child(7), th:nth-child(7) { width: 15%; } /* Asunto */
         td:nth-child(8), th:nth-child(8) { width: 6%; }  /* Tipo */
@@ -345,14 +362,15 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
             }
 
             fecha {
-            white-space: nowrap;
-            font-size: 0.9em;
-        }
+                white-space: nowrap;
+                font-size: 0.9em;
+            }
         
-        .usuario-registro {
-            font-size: 0.85em;
-            color: #666;
-        }}
+            .usuario-registro {
+                font-size: 0.85em;
+                color: #666;
+            }
+        }
     </style>
 </head>
 <body>
@@ -388,20 +406,20 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
             <h2 class="card-title">➕ Nuevo Oficio</h2>
             <form action="guardar.php" method="post" enctype="multipart/form-data" id="oficioForm">
                 <div class="form-grid">
-                <div class="form-group">
-                        <label for="fecha_creacion">Fecha de creacion del oficio</label>
-                        <input type="date" id="fecha_creacion" name="fecha_creacion" required> <value="<?= date('Y-m-d\TH:i') ?>">
+                    <div class="form-group">
+                        <label for="fecha_creacion">Fecha de creación del oficio</label>
+                        <input type="date" id="fecha_creacion" name="fecha_creacion" required value="<?= date('Y-m-d') ?>">
                     </div>    
                 
-                <div class="form-group">
+                    <div class="form-group">
                         <label for="fecha_entrega">Fecha del sello de Entrega</label>
-                        <input type="date" id="fecha_entrega" name="fecha_entrega" required>
+                        <input type="date" id="fecha_entrega" name="fecha_entrega" required value="<?= date('Y-m-d') ?>">
                     </div>
                     
                     <div class="form-group">
-    <label for="numero_oficio_usuario">Oficio :</label>
-    <input type="text" class="form-control" id="numero_oficio_usuario" name="numero_oficio_usuario" required>
-</div>
+                        <label for="numero_oficio_usuario">Oficio:</label>
+                        <input type="text" class="form-control" id="numero_oficio_usuario" name="numero_oficio_usuario" required>
+                    </div>
                     
                     <div class="form-group">
                         <label for="remitente">Remitente</label>
@@ -409,12 +427,14 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                     </div>
 
                     <div class="form-group">
-                        <label for="numero_empleado">Número de Empleado</label>
-                        <input type="text" id="numero_empleado" name="numero_empleado" required
-                               pattern="[A-Za-z0-9-]+" title="Solo letras, números y guiones"
-                               onblur="validarNumeroEmpleado(this.value)">
-                        <small id="empleadoFeedback" class="text-muted"></small>
-                    </div>
+    <label for="email_institucional">Correo institucional</label>
+    <input type="email" id="email_institucional" name="email_institucional" required
+        placeholder="usuario@tlalpan.cdmx.gob.mx"
+        onblur="validarCorreo(this)">
+    <small id="emailHelp" class="text-muted">Debe ser un correo institucional válido</small>
+</div>
+
+<input type="hidden" name="numero_empleado" id="numero_empleado" value="<?= generarNumeroAutomatico() ?>">
                     
                     <div class="form-group">
                         <label for="cargo_remitente">Cargo</label>
@@ -431,7 +451,7 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                             <option value="OTRO">Otro (especificar)</option>
                         </select>
                         <input type="text" id="depto_remitente_otro" name="depto_remitente_otro" 
-                               style="margin-top: 5px; display: none;" placeholder="Especifique el Depto">
+                                style="margin-top: 5px; display: none;" placeholder="Especifique el Depto">
                     </div>
                     
                     <div class="form-group">
@@ -449,13 +469,13 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                             <option value="OTRO">Otro (especificar)</option>
                         </select>
                         <input type="text" id="jud_destino_otro" name="jud_destino_otro" 
-                               style="margin-top: 5px; display: none;" placeholder="Especifique el Depto">
+                                style="margin-top: 5px; display: none;" placeholder="Especifique el Depto">
                     </div>
                 
                     <div class="form-group">
                         <label for="trabajador_destino">Nombre del Trabajador Destino</label>
                         <input type="text" id="trabajador_destino" name="trabajador_destino" 
-                               placeholder="Nombre completo del destinatario">
+                                placeholder="Nombre completo del destinatario">
                     </div>
                     
                     <div class="form-group">
@@ -489,9 +509,9 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                     </div>
 
                     <div class="form-group">
-    <label for="extension">Extensión</label>
-    <input type="text" id="extension" name="extension" pattern="[0-9]{1,5}" title="Solo números, máximo 5 dígitos">
-</div>
+                        <label for="extension">Extensión</label>
+                        <input type="text" id="extension" name="extension" pattern="[0-9]{1,5}" title="Solo números, máximo 5 dígitos">
+                    </div>
                     
                     <div class="form-group">
                         <label for="pdf_file">Subir PDF</label>
@@ -510,10 +530,9 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                 <table>
                     <thead>
                         <tr>
-                            
-                             <th>Num de oficio</th>   
+                            <th>Num de oficio</th>   
                             <th>Remitente</th>
-                            <th>N° Empleado</th>
+                            <th>Correo Institucional</th>
                             <th>Depto Destino</th>
                             <th>Asunto</th>
                             <th>Tipo</th>
@@ -525,10 +544,9 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                     <tbody>
                         <?php while ($row = mysqli_fetch_assoc($result)): ?>
                         <tr>
-                        
-                        <td><?= htmlspecialchars($row['numero_oficio_usuario']) ?></td>
+                            <td><?= htmlspecialchars($row['numero_oficio_usuario'] ?? 'N/A') ?></td>
                             <td><?= htmlspecialchars($row['remitente']) ?></td>
-                            <td><?= htmlspecialchars($row['numero_empleado']) ?></td>
+                            <td><?= htmlspecialchars($row['email_institucional']) ?></td>
                             <td><?= htmlspecialchars($row['jud_destino']) ?></td>
                             <td><?= htmlspecialchars($row['asunto']) ?></td>
                             <td><?= htmlspecialchars($row['tipo']) ?></td>
@@ -543,9 +561,9 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                             <td>
                                 <?php if (!empty($row['pdf_url_completo'])): ?>
                                     <a href="<?= htmlspecialchars($row['pdf_url_completo']) ?>" 
-                                       target="_blank" 
-                                       class="action-link"
-                                       title="Ver documento PDF">
+                                        target="_blank" 
+                                        class="action-link"
+                                        title="Ver documento PDF">
                                         📄 Ver
                                     </a>
                                 <?php else: ?>
@@ -555,27 +573,23 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                             <td>
                                 <?php if ($_SESSION['user']['rol'] === 'SISTEMAS'): ?>
                                     <a href="editar.php?id=<?= $row['id'] ?>" 
-                                       class="action-link"
-                                       title="Editar oficio">
+                                        class="action-link"
+                                        title="Editar oficio">
                                         ✏️ Editar
                                     </a>
                                     <a href="eliminar.php?id=<?= $row['id'] ?>" 
-                                       class="action-link delete-link"
-                                       title="Eliminar oficio"
-                                       onclick="return confirm('¿Estás seguro de eliminar este oficio?')">
+                                        class="action-link delete-link"
+                                        title="Eliminar oficio"
+                                        onclick="return confirm('¿Estás seguro de eliminar este oficio?')">
                                         🗑️ Eliminar
                                     </a>
                                 <?php else: ?>
                                     <a href="detalle.php?id=<?= $row['id'] ?>" 
-                                       class="action-link"
-                                       title="Ver detalles">
+                                        class="action-link"
+                                        title="Ver detalles">
                                         🔍 Ver
                                     </a>
                                 <?php endif; ?>
-                                </div>
-                            
-                            
-           
                             </td>
                         </tr>
                         <?php endwhile; ?>
@@ -586,68 +600,85 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
     </main>
 
     <script>
-        // Mostrar campo "Otro" cuando se seleccione esa opción
-        document.getElementById('depto_remitente').addEventListener('change', function() {
-            const otroField = document.getElementById('depto_remitente_otro');
-            otroField.style.display = this.value === 'OTRO' ? 'block' : 'none';
-            if (this.value !== 'OTRO') otroField.value = '';
+    // Mostrar campo "Otro" cuando se seleccione esa opción
+    document.getElementById('depto_remitente').addEventListener('change', function () {
+        const otroField = document.getElementById('depto_remitente_otro');
+        otroField.style.display = this.value === 'OTRO' ? 'block' : 'none';
+        if (this.value !== 'OTRO') otroField.value = '';
+    });
+
+    document.getElementById('jud_destino').addEventListener('change', function () {
+        const otroField = document.getElementById('jud_destino_otro');
+        otroField.style.display = this.value === 'OTRO' ? 'block' : 'none';
+        if (this.value !== 'OTRO') otroField.value = '';
+    });
+
+    // Validación de campos requeridos al enviar el formulario
+    document.getElementById('oficioForm')?.addEventListener('submit', function (e) {
+        const form = this;
+        const requiredFields = form.querySelectorAll('[required]');
+        let isValid = true;
+
+        requiredFields.forEach(field => {
+            if (!field.value.trim()) {
+                alert(`El campo "${field.labels[0].textContent}" es obligatorio.`);
+                field.focus();
+                isValid = false;
+                e.preventDefault(); // Detener el envío
+                return;
+            }
         });
 
-        document.getElementById('jud_destino').addEventListener('change', function() {
-            const otroField = document.getElementById('jud_destino_otro');
-            otroField.style.display = this.value === 'OTRO' ? 'block' : 'none';
-            if (this.value !== 'OTRO') otroField.value = '';
-        });
+        // Validar archivo PDF
+        const pdfFile = document.getElementById('pdf_file');
+        if (pdfFile && pdfFile.files.length > 0) {
+            const file = pdfFile.files[0];
+            if (file.type !== 'application/pdf') {
+                alert('Solo se permiten archivos PDF');
+                isValid = false;
+                e.preventDefault(); // Detener el envío
+            }
+        }
+    });
 
-        function validarNumeroEmpleado(numero) {
-            if (!numero) return;
-            
-            fetch('validar_empleado.php?numero=' + encodeURIComponent(numero))
+    // Validación en tiempo real del correo
+    function validarCorreo(input) {
+        const email = input.value.trim();
+        const emailHelp = document.getElementById('emailHelp');
+
+        if (!email.match(/@tlalpan\.cdmx\.gob\.mx$/i)) {
+            emailHelp.style.color = 'red';
+            emailHelp.textContent = 'Correo no válido. Debe ser @tlalpan.cdmx.gob.mx';
+            input.setCustomValidity('Correo institucional inválido');
+            return false;
+        } else {
+            emailHelp.style.color = 'green';
+            emailHelp.textContent = 'Correo institucional válido';
+            input.setCustomValidity('');
+
+            // Verificar si el correo ya existe
+            fetch(`verificar_empleado.php?email=${encodeURIComponent(email)}`)
                 .then(response => response.json())
                 .then(data => {
-                    const feedback = document.getElementById('empleadoFeedback');
                     if (data.existe) {
-                        feedback.textContent = 'Empleado existente: ' + data.nombre;
-                        feedback.style.color = '#28a745';
-                    } else {
-                        feedback.textContent = 'Nuevo empleado será registrado';
-                        feedback.style.color = '#17a2b8';
+                        document.getElementById('numero_empleado').value = data.numero_empleado;
                     }
+                })
+                .catch(error => {
+                    console.error('Error al verificar empleado:', error);
                 });
-        }
 
-        document.getElementById('oficioForm')?.addEventListener('submit', function(e) {
-            const form = this;
-            const requiredFields = form.querySelectorAll('[required]');
-            let isValid = true;
-            
-            requiredFields.forEach(field => {
-                if (!field.value.trim()) {
-                    alert(`El campo "${field.labels[0].textContent}" es obligatorio.`);
-                    field.focus();
-                    isValid = false;
-                    return;
-                }
+            return true;
+        }
+    }
+
+    // Validación del correo al cambiar el input
+    document.addEventListener('DOMContentLoaded', function () {
+        const emailInput = document.getElementById('email_institucional');
+        if (emailInput) {
+            emailInput.addEventListener('input', function () {
+                validarCorreo(this);
             });
-            
-            const pdfFile = form.querySelector('#pdf_file');
-            if (pdfFile.files.length > 0) {
-                const file = pdfFile.files[0];
-                if (file.type !== 'application/pdf') {
-                    alert('Solo se permiten archivos PDF');
-                    isValid = false;
-                }
-            }
-         
-            if (!isValid) {
-                e.preventDefault();
-            }
-        });
-    </script>
-</body>
-</html>
-            }
-        });
-    </script>
-</body>
-</html>
+        }
+    });
+</script>

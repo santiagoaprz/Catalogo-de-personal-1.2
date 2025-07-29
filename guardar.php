@@ -1,15 +1,25 @@
 <?php
+
+// Evitar que la conexión se cierre prematuramente
+register_shutdown_function(function() {
+    global $conn;
+    if (isset($conn)) {
+        $conn = null; // Limpiar sin cerrar explícitamente
+    }
+});
 if (session_status() === PHP_SESSION_NONE) session_start();
 
 require 'session_config.php';
 require 'database.php';
 require 'auth_middleware.php';
+require 'funciones.php';
 requireAuth();
 requireRole(['SISTEMAS', 'ADMIN', 'CAPTURISTA']);
 
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
+// Validaciones iniciales
 if (!isset($_SESSION['user']['id'])) {
     die(json_encode(['error' => 'Sesión no válida', 'details' => 'ID de usuario no encontrado']));
 }
@@ -22,15 +32,16 @@ if (empty($_FILES['pdf_file']['tmp_name'])) {
     die(json_encode(['error' => 'Archivo PDF requerido']));
 }
 
-$numero_empleado = preg_replace('/[^A-Za-z0-9\-]/', '', trim($_POST['numero_empleado']));
-if (empty($numero_empleado)) {
-    die(json_encode(['error' => 'Número de empleado inválido']));
+// Validar correo institucional
+$email_institucional = trim($_POST['email_institucional']);
+if (!filter_var($email_institucional, FILTER_VALIDATE_EMAIL) || !preg_match('/@tlalpan\.cdmx\.gob\.mx$/i', $email_institucional)) {
+    die(json_encode(['error' => 'Correo institucional inválido', 'details' => 'Debe usar un correo @tlalpan.cdmx.gob.mx']));
 }
 
 $conn->begin_transaction();
 
 try {
-    // ===== GENERACIÓN DE NÚMERO DE OFICIO =====
+    // ===== 1. GENERACIÓN DE NÚMERO DE OFICIO =====
     mysqli_query($conn, "LOCK TABLES secuencia_oficios WRITE, catalogo_personal WRITE, documentos WRITE");
     $seq_result = mysqli_query($conn, "SELECT ultimo_numero FROM secuencia_oficios LIMIT 1");
     $seq_row = mysqli_fetch_assoc($seq_result);
@@ -39,7 +50,7 @@ try {
     
     $numero_oficio = "OF-".str_pad($nuevo_numero, 5, '0', STR_PAD_LEFT);
 
-    // ===== PREPARAR VARIABLES PARA INSERCIÓN =====
+    // ===== 2. PREPARAR VARIABLES PARA INSERCIÓN =====
     $etapa = 'RECIBIDO';
     $fecha_entrega = $_POST['fecha_entrega'];
     $remitente = $_POST['remitente'];
@@ -56,7 +67,15 @@ try {
     $usuario_id = $_SESSION['user']['id'];
     $numero_oficio_usuario = trim($_POST['numero_oficio_usuario']);
 
-    // ===== PROCESAMIENTO DEL PDF =====
+    // ===== 3. VALIDACIÓN DE CAMPOS REQUERIDOS =====
+    $required = ['fecha_entrega', 'asunto', 'tipo', 'estatus', 'remitente', 'cargo_remitente'];
+    foreach ($required as $field) {
+        if (empty($_POST[$field])) {
+            throw new Exception("Campo requerido faltante: $field");
+        }
+    }
+
+    // ===== 4. PROCESAMIENTO DEL PDF =====
     if (!is_uploaded_file($_FILES['pdf_file']['tmp_name'])) {
         throw new Exception("Intento de subida no válido");
     }
@@ -77,155 +96,194 @@ try {
     }
 
     $pdf_name = 'doc_'.date('Ymd_His').'_'.bin2hex(random_bytes(4)).'.pdf';
-    $pdf_path = 'pdfs/' . $pdf_name;
+    $pdf_path = $upload_dir . $pdf_name;
 
     if (!move_uploaded_file($_FILES['pdf_file']['tmp_name'], $pdf_path)) {
         throw new Exception("Error al mover el PDF. Verifique permisos.");
     }
-    error_log("PDF guardado en: " . realpath($pdf_path));
-error_log("URL accesible: http://localhost/SISTEMA_OFICIOS/" . $pdf_path);
 
-    // ===== VALIDACIÓN DE CAMPOS REQUERIDOS =====
-    $required = ['fecha_entrega', 'asunto', 'tipo', 'estatus'];
-    foreach ($required as $field) {
-        if (empty($_POST[$field])) {
-            throw new Exception("Campo requerido faltante: $field");
-        }
-    }
+    // ===== 5. GESTIÓN DE EMPLEADOS EN CATÁLOGO (nuevo código) =====
+    $check_query = "SELECT id FROM catalogo_personal WHERE email_institucional = ? LIMIT 1";
+    $stmt_check = $conn->prepare($check_query);
+    $stmt_check->bind_param('s', $email_institucional);
+    $stmt_check->execute();
 
-    // ===== GESTIÓN DE EMPLEADOS =====
-    $check_query = "SELECT departamento_jud FROM catalogo_personal WHERE numero_empleado = ? LIMIT 1";
-$stmt_check = $conn->prepare($check_query);
-$stmt_check->bind_param('s', $numero_empleado);
-$stmt_check->execute();
-$empleado = $stmt_check->get_result()->fetch_assoc();
-
-if ($empleado) {
-    // Empleado existente - actualizar departamento si cambió
-    $depto_actual = $empleado['departamento_jud'];
-    if ($depto_actual !== $depto_remitente) {
-        // Guardar historial antes de actualizar
-        $historial_query = "INSERT INTO historial_departamentos 
-            (numero_empleado, departamento_jud) 
-            VALUES (?, ?)";
-        $stmt_historial = $conn->prepare($historial_query);
-        $stmt_historial->bind_param('ss', $numero_empleado, $depto_actual);
-        $stmt_historial->execute();
-
-        // Registrar el cambio en historial_departamentos
-$historial_query = "INSERT INTO historial_departamentos (
-    numero_empleado, 
-    departamento_anterior, 
-    departamento_nuevo, 
-    usuario_registra,
-    numero_oficio_usuario
-) VALUES (?, ?, ?, ?, ?)";
-
-$stmt_historial = $conn->prepare($historial_query);
-$stmt_historial->bind_param('sssis', 
-    $numero_empleado,
-    $empleado ? $empleado['departamento_jud'] : 'Nuevo ingreso',
-    $depto_remitente,
-    $usuario_id,
-    $numero_oficio_usuario
-);
-$stmt_historial->execute();
-
-        // Actualizar departamento
+    if ($stmt_check->get_result()->num_rows > 0) {
+        // Actualizar empleado existente
         $update_query = "UPDATE catalogo_personal SET 
+            nombre = ?,
+            puesto = ?,
             departamento_jud = ?,
             telefono = ?,
             extension = ?,
-            ultima_actualizacion = CURRENT_TIMESTAMP
-            WHERE numero_empleado = ?";
+            dire_fisica = ?,
+            ultima_actualizacion = NOW()
+            WHERE email_institucional = ?";
+        
         $stmt_update = $conn->prepare($update_query);
-        $stmt_update->bind_param('ssss', $depto_remitente, $telefono, $extension, $numero_empleado);
+        $stmt_update->bind_param('sssssss', 
+            $remitente,
+            $cargo_remitente,
+            $depto_remitente,
+            $telefono,
+            $extension,
+            $dire_fisica,
+            $email_institucional
+        );
         $stmt_update->execute();
+    } else {
+        // Insertar nuevo empleado
+        
+        $insert_query = "INSERT INTO catalogo_personal (
+            email_institucional, 
+            numero_empleado, 
+            nombre, 
+            puesto, 
+            departamento_jud, 
+            dire_fisica, 
+            telefono, 
+            extension
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        
+        $numero_empleado = generarNumeroEmpleado($conn);
+        $stmt_insert = $conn->prepare($insert_query);
+        $stmt_insert->bind_param('ssssssss', 
+            $email_institucional,
+            $numero_empleado,
+            $remitente,
+            $cargo_remitente,
+            $depto_remitente,
+            $dire_fisica,
+            $telefono,
+            $extension
+        );
+        $stmt_insert->execute();
     }
-} else {
-    // Nuevo empleado - insertar en catalogo_personal
-    $insert_query = "INSERT INTO catalogo_personal 
-        (numero_empleado, nombre, puesto, departamento_jud, dire_fisica, telefono, extension) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)";
-    $stmt_insert = $conn->prepare($insert_query);
-    $stmt_insert->bind_param('sssssss', 
-        $numero_empleado,
-        $remitente,
-        $cargo_remitente,
-        $depto_remitente,
-        $dire_fisica,
-        $telefono,
-        $extension
-    );
-    $stmt_insert->execute();
-}
-
-    // ===== INSERCIÓN DEL DOCUMENTO =====
-    $insert_doc_query = "INSERT INTO documentos (
-        fecha_entrega, numero_oficio, numero_oficio_usuario, remitente, cargo_remitente, 
-        depto_remitente, telefono, asunto, tipo, estatus, 
-        pdf_url, destinatario, jud_destino, numero_empleado,
-        dire_fisica, usuario_registra, etapa
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    
-    $stmt_doc = $conn->prepare($insert_doc_query);
-    $stmt_doc->bind_param('sssssssssssssssis',
-        $fecha_entrega,
-        $numero_oficio,
-        $numero_oficio_usuario,  // Número capturado por el usuario
-        $remitente,              // Nombre del remitente
-        $cargo_remitente,
-        $depto_remitente,
-        $telefono,
-        $asunto,
-        $tipo,
-        $estatus,
-        $pdf_path,
-        $destinatario,
-        $jud_destino,
-        $numero_empleado,
-        $dire_fisica,
-        $usuario_id,
-        $etapa
-    );
-    
-    if (!$stmt_doc->execute()) {
-        throw new Exception("Error al guardar documento: ".$stmt_doc->error);
+    if (empty($email_institucional)) {
+        throw new Exception("Correo institucional es requerido");
+    }
+    if (empty($numero_empleado)) {
+        $numero_empleado = generarNumeroEmpleado($conn);
     }
 
+   // ===== 6. INSERCIÓN DEL DOCUMENTO =====
+   $insert_doc_query = "INSERT INTO documentos (
+    fecha_creacion,
+    fecha_entrega, 
+    numero_oficio, 
+    numero_oficio_usuario, 
+    remitente, 
+    cargo_remitente, 
+    depto_remitente, 
+    telefono, 
+    extension,
+    asunto, 
+    tipo, 
+    estatus, 
+    pdf_url, 
+    destinatario, 
+    jud_destino, 
+    email_institucional,
+    numero_empleado,
+    dire_fisica, 
+    usuario_registra, 
+    etapa
+) VALUES (NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-// ===== REGISTRO EN AUDITORÍA =====
-$accion = 'CREACION_OFICIO';
-$ip_address = $_SERVER['REMOTE_ADDR'];
-$user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Desconocido';
-
-$auditoria_query = "INSERT INTO auditoria_oficios (
-    usuario_id,
-    accion,
-    numero_oficio,
-    numero_oficio_usuario,
-    ip_address,
-    user_agent
-) VALUES (?, ?, ?, ?, ?, ?)";
-
-$stmt_auditoria = $conn->prepare($auditoria_query);
-$stmt_auditoria->bind_param('isssss', 
-    $usuario_id,
-    $accion,
+$stmt_doc = $conn->prepare($insert_doc_query);
+$stmt_doc->bind_param('sssssssssssssssssis',
+    $fecha_entrega,
     $numero_oficio,
     $numero_oficio_usuario,
-    $ip_address,
-    $user_agent
+    $remitente,
+    $cargo_remitente,
+    $depto_remitente,
+    $telefono,
+    $extension, // Asegúrate de incluir este campo
+    $asunto,
+    $tipo,
+    $estatus,
+    $pdf_path,
+    $destinatario,
+    $jud_destino,
+    $email_institucional,
+    $numero_empleado,
+    $dire_fisica,
+    $usuario_id,
+    $etapa
 );
-$stmt_auditoria->execute();
 
+if (!$stmt_doc->execute()) {
+    throw new Exception("Error al guardar documento: " . $stmt_doc->error);
+}
 
+// ===== 6.1 INSERCIÓN EN HISTORIAL DEPARTAMENTOS =====
+$historial_query = "INSERT INTO historial_departamentos (
+    personal_id,
+    numero_empleado,
+    departamento_anterior,
+    departamento_nuevo,
+    usuario_registra,
+    documento_id,
+    numero_oficio_usuario,
+    email_institucional
+) SELECT 
+    id,
+    numero_empleado,
+    departamento_jud,
+    ?,
+    ?,
+    LAST_INSERT_ID(),
+    ?,
+    ?
+FROM catalogo_personal 
+WHERE email_institucional = ?";
 
+$stmt_historial = $conn->prepare($historial_query);
+$stmt_historial->bind_param('sisss', 
+    $depto_remitente,      // departamento_nuevo
+    $usuario_id,           // usuario_registra
+    $numero_oficio_usuario,
+    $email_institucional,
+    $email_institucional   // WHERE email_institucional = ?
+);
+
+if (!$stmt_historial->execute()) {
+    throw new Exception("Error al registrar historial de departamento: " . $stmt_historial->error);
+}
+
+    
+    // ===== 7. REGISTRO EN AUDITORÍA =====
+    $accion = 'CREACION_OFICIO';
+    $ip_address = $_SERVER['REMOTE_ADDR'];
+    $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'Desconocido';
+
+    $auditoria_query = "INSERT INTO auditoria_oficios (
+        usuario_id,
+        accion,
+        numero_oficio,
+        numero_oficio_usuario,
+        ip_address,
+        user_agent
+    ) VALUES (?, ?, ?, ?, ?, ?)";
+
+    $stmt_auditoria = $conn->prepare($auditoria_query);
+    $stmt_auditoria->bind_param('isssss', 
+        $usuario_id,
+        $accion,
+        $numero_oficio,
+        $numero_oficio_usuario,
+        $ip_address,
+        $user_agent
+    );
+    $stmt_auditoria->execute();
+
+    // ===== 8. FINALIZACIÓN =====
     mysqli_query($conn, "UNLOCK TABLES");
     $conn->commit();
 
     $_SESSION['success'] = "Documento $numero_oficio registrado correctamente";
-    header("Location: index.php?rand=".rand());
+    header("Location: index.php");
     exit;
 
 } catch (Exception $e) {

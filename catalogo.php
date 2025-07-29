@@ -1,4 +1,12 @@
 <?php
+
+// Evitar que la conexión se cierre prematuramente
+register_shutdown_function(function() {
+    global $conn;
+    if (isset($conn)) {
+        $conn = null; // Limpiar sin cerrar explícitamente
+    }
+});
 require 'session_config.php';
 require 'auth_middleware.php';
 requireAuth();
@@ -7,9 +15,10 @@ require 'database.php';
 // Configuración para GROUP_CONCAT
 mysqli_query($conn, "SET SESSION group_concat_max_len = 1000000;");
 
-// Consulta principal para el listado de personal con historial
+// CONSULTA MODIFICADA - Más detallada para diagnóstico
 $query = "SELECT 
-    cp.numero_empleado,
+    cp.id,
+    cp.email_institucional,
     cp.nombre,
     cp.puesto,
     cp.departamento_jud AS departamento_actual,
@@ -17,20 +26,20 @@ $query = "SELECT
     IFNULL(cp.extension, '') AS extension,
     COUNT(d.id) AS total_documentos,
     (
-       SELECT GROUP_CONCAT(
+        SELECT GROUP_CONCAT(
             DISTINCT CONCAT(
                 DATE_FORMAT(h.fecha_cambio, '%d/%m/%Y'), ': ',
-                h.departamento_anterior, ' → ', h.departamento_nuevo
+                IFNULL(h.departamento_anterior, 'N/A'), ' → ', h.departamento_nuevo
             )
             ORDER BY h.fecha_cambio DESC 
             SEPARATOR ' | '
         ) 
         FROM historial_departamentos h 
-        WHERE h.numero_empleado = cp.numero_empleado
+        WHERE h.email_institucional = cp.email_institucional
     ) AS historial_deptos
 FROM catalogo_personal cp
-LEFT JOIN documentos d ON cp.numero_empleado = d.numero_empleado
-GROUP BY cp.numero_empleado
+LEFT JOIN documentos d ON cp.email_institucional = d.email_institucional
+GROUP BY cp.email_institucional, cp.id, cp.nombre, cp.puesto, cp.departamento_jud, cp.telefono, cp.extension
 ORDER BY cp.nombre";
 
 $result = mysqli_query($conn, $query);
@@ -38,7 +47,13 @@ $result = mysqli_query($conn, $query);
 if (!$result) {
     die("Error en la consulta: " . mysqli_error($conn));
 }
+
+// NUEVO: Registro de diagnóstico
+file_put_contents('catalogo_debug.log', "\nConsulta ejecutada: ".date('Y-m-d H:i:s')."\n", FILE_APPEND);
+file_put_contents('catalogo_debug.log', "Número de registros: ".mysqli_num_rows($result)."\n", FILE_APPEND);
 ?>
+
+<!-- [El resto del HTML permanece igual] -->
 
 <!DOCTYPE html>
 <html lang="es">
@@ -146,7 +161,7 @@ if (!$result) {
         <table>
             <thead>
                 <tr>
-                    <th>N° Empleado</th>
+                    <th>Correo institucional</th>
                     <th>Nombre</th>
                     <th>Puesto</th>
                     <th>Depto. Actual</th>
@@ -159,7 +174,7 @@ if (!$result) {
             <tbody>
                 <?php while ($row = mysqli_fetch_assoc($result)): ?>
                 <tr>
-                    <td><?= htmlspecialchars($row['numero_empleado']) ?></td>
+                    <td><?= htmlspecialchars($row['email_institucional']) ?></td>
                     <td><?= htmlspecialchars($row['nombre']) ?></td>
                     <td><?= htmlspecialchars($row['puesto']) ?></td>
                     <td class="depto-actual"><?= htmlspecialchars($row['departamento_actual']) ?></td>
