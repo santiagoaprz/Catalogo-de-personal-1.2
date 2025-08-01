@@ -3,7 +3,7 @@
 register_shutdown_function(function() {
     global $conn;
     if (isset($conn)) {
-        $conn = null; // Limpiar sin cerrar explícitamente
+        $conn = null;
     }
 });
 
@@ -16,13 +16,18 @@ header("Cache-Control: no-cache, no-store, must-revalidate");
 header("Pragma: no-cache");
 header("Expires: 0");
 
-// Consulta mejorada con más información
+// Mostrar errores para depuración
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+// Consulta optimizada para historial.php
 $query = "SELECT 
     d.id, 
     d.numero_oficio,
     COALESCE(d.numero_oficio_usuario, d.numero_oficio) AS numero_oficio_mostrar,
     d.remitente,
-    COALESCE(d.email_institucional, 'No especificado') AS email_institucional,
+    COALESCE(d.email_institucional, cp.email_institucional, 'No especificado') AS email_institucional,
     d.asunto, 
     d.tipo,
     d.jud_destino,
@@ -31,104 +36,164 @@ $query = "SELECT
     d.pdf_url,
     u.username AS usuario_registro
 FROM documentos d
+LEFT JOIN catalogo_personal cp ON (
+    cp.email_institucional = d.email_institucional OR 
+    cp.numero_empleado = d.numero_empleado
+)
 LEFT JOIN usuarios u ON d.usuario_registra = u.id
-WHERE d.remitente IS NOT NULL
-ORDER BY d.fecha_creacion DESC, d.id DESC";
+WHERE d.id IS NOT NULL
+ORDER BY d.id DESC, d.fecha_creacion DESC"; 
 
 $result = mysqli_query($conn, $query);
 
 if (!$result) {
     die("Error en la consulta: " . mysqli_error($conn));
 }
-?>
 
-<?php
-require 'session_config.php';
-require 'auth_middleware.php';
-requireAuth();
-require 'database.php';
-
-header("Cache-Control: no-cache, no-store, must-revalidate");
-header("Pragma: no-cache");
-header("Expires: 0");
-
-// Consulta segura y optimizada
-$query = "SELECT 
-    d.id, 
-    d.numero_oficio,
-    COALESCE(d.numero_oficio_usuario, d.numero_oficio) AS numero_oficio_mostrar,
-    d.remitente,
-    COALESCE(d.email_institucional, 'No especificado') AS email_institucional,
-    d.asunto, 
-    d.tipo,
-    d.jud_destino,
-    d.estatus,
-    DATE_FORMAT(d.fecha_entrega, '%d/%m/%Y') AS fecha_entrega_format,
-    d.pdf_url,
-    u.username AS usuario_registro
-FROM documentos d
-LEFT JOIN usuarios u ON d.usuario_registra = u.id
-WHERE d.remitente IS NOT NULL
-ORDER BY d.fecha_creacion DESC, d.id DESC";
-
-$result = mysqli_query($conn, $query);
-
-if (!$result) {
-    die("Error en la consulta: " . mysqli_error($conn));
-}
+$total_registros = mysqli_num_rows($result);
 ?>
 
 <!DOCTYPE html>
-<html lang="es">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Historial de Documentos</title>
+    <title>Historial Completo de Documentos</title>
     <style>
-        /* [Mantén tus estilos actuales] */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        h1 {
+            color: #5D2E36;
+            border-bottom: 2px solid #722F37;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        .info-box {
+            background-color: #f0f0f0;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid #722F37;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #722F37;
+            color: white;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+        tr:nth-child(even) {
+            background-color: #f8f8f8;
+        }
+        tr:hover {
+            background-color: #f0f0f0;
+        }
+        .pdf-link {
+            color: #5D2E36;
+            font-weight: bold;
+            text-decoration: none;
+        }
+        .pdf-link:hover {
+            text-decoration: underline;
+        }
+        .estatus-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: 600;
+            color: white;
+        }
+        .estatus-seguimiento {
+            background-color: #f39c12;
+        }
+        .estatus-atendido {
+            background-color: #2ecc71;
+        }
+        .estatus-turnado {
+            background-color: #3498db;
+        }
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-style: italic;
+            background-color: #f9f9f9;
+            border: 1px dashed #ccc;
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2>Historial Completo de Documentos</h2>
-        
+    <h1>Historial Completo de Documentos</h1>
+    
+    <div class="info-box">
+        Total de documentos registrados: <?= $total_registros ?>
+    </div>
+
+    <?php if ($total_registros === 0): ?>
+        <div class="no-data">
+            <p>No se encontraron documentos registrados en el sistema.</p>
+        </div>
+    <?php else: ?>
         <table>
             <thead>
                 <tr>
-                    <th>Oficio</th>
+                    <th>ID</th>
+                    <th>N° Oficio</th>
                     <th>Remitente</th>
-                    <th>Email Institucional</th>
-                    <th>Jud Destino</th>
+                    <th>Email</th>
+                    <th>N° Empleado</th>
+                    <th>JUD Destino</th>
                     <th>Asunto</th>
                     <th>Tipo</th>
                     <th>Estatus</th>
-                    <th>Fecha Entrega</th>
-                    <th>Usuario</th>
+                    <th>Fecha Creación</th>
+                    <th>Registrado por</th>
                     <th>PDF</th>
                 </tr>
             </thead>
             <tbody>
                 <?php while ($row = mysqli_fetch_assoc($result)): ?>
                 <tr>
-                    <td><?= htmlspecialchars($row['numero_oficio_mostrar'] ?? 'N/A') ?></td>
-                    <td><?= htmlspecialchars($row['remitente'] ?? '') ?></td>
-                    <td><?= htmlspecialchars($row['email_institucional'] ?? '') ?></td>
-                    <td><?= htmlspecialchars($row['jud_destino'] ?? '') ?></td>
-                    <td><?= htmlspecialchars(substr($row['asunto'] ?? '', 0, 50)) ?>...</td>
-                    <td><?= htmlspecialchars($row['tipo'] ?? '') ?></td>
-                    <td><?= htmlspecialchars($row['estatus'] ?? '') ?></td>
-                    <td><?= htmlspecialchars($row['fecha_entrega_format'] ?? '') ?></td>
-                    <td><?= htmlspecialchars($row['usuario_registro'] ?? '') ?></td>
+                    <td><?= htmlspecialchars($row['id']) ?></td>
+                    <td><?= htmlspecialchars($row['numero_oficio_mostrar']) ?></td>
+                    <td><?= htmlspecialchars($row['remitente']) ?></td>
+                    <td><?= htmlspecialchars($row['email_institucional']) ?></td>
+                    <td><?= htmlspecialchars($row['numero_empleado']) ?></td>
+                    <td><?= htmlspecialchars($row['jud_destino']) ?></td>
+                    <td><?= htmlspecialchars(substr($row['asunto'], 0, 50)) ?><?= strlen($row['asunto']) > 50 ? '...' : '' ?></td>
+                    <td><?= htmlspecialchars($row['tipo']) ?></td>
                     <td>
-                        <?php if (!empty($row['pdf_url'])): ?>
-                            <a href="<?= htmlspecialchars($row['pdf_url']) ?>" target="_blank" class="pdf-link">📄</a>
+                        <span class="estatus-badge estatus-<?= strtolower($row['estatus']) ?>">
+                            <?= htmlspecialchars($row['estatus']) ?>
+                        </span>
+                    </td>
+                    <td><?= htmlspecialchars($row['fecha_creacion_format']) ?></td>
+                    <td><?= htmlspecialchars($row['usuario_registro']) ?></td>
+                    <td>
+                        <?php if (!empty($row['pdf_url_completo'])): ?>
+                            <a href="<?= htmlspecialchars($row['pdf_url_completo']) ?>" target="_blank" class="pdf-link">Ver PDF</a>
                         <?php else: ?>
-                            <span>No disponible</span>
+                            <span style="color: #999;">No disponible</span>
                         <?php endif; ?>
                     </td>
                 </tr>
                 <?php endwhile; ?>
             </tbody>
         </table>
-    </div>
+    <?php endif; ?>
 </body>
 </html>

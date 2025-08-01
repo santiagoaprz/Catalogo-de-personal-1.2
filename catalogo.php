@@ -1,12 +1,12 @@
 <?php
-
 // Evitar que la conexión se cierre prematuramente
 register_shutdown_function(function() {
     global $conn;
     if (isset($conn)) {
-        $conn = null; // Limpiar sin cerrar explícitamente
+        $conn = null;
     }
 });
+
 require 'session_config.php';
 require 'auth_middleware.php';
 requireAuth();
@@ -15,7 +15,7 @@ require 'database.php';
 // Configuración para GROUP_CONCAT
 mysqli_query($conn, "SET SESSION group_concat_max_len = 1000000;");
 
-// CONSULTA MODIFICADA - Más detallada para diagnóstico
+// CONSULTA MEJORADA - Relaciones correctas y optimizada
 $query = "SELECT 
     cp.id,
     cp.email_institucional,
@@ -23,24 +23,24 @@ $query = "SELECT
     cp.puesto,
     cp.departamento_jud AS departamento_actual,
     cp.telefono,
-    IFNULL(cp.extension, '') AS extension,
+    cp.extension,
     COUNT(d.id) AS total_documentos,
-    (
-        SELECT GROUP_CONCAT(
-            DISTINCT CONCAT(
-                DATE_FORMAT(h.fecha_cambio, '%d/%m/%Y'), ': ',
-                IFNULL(h.departamento_anterior, 'N/A'), ' → ', h.departamento_nuevo
-            )
-            ORDER BY h.fecha_cambio DESC 
-            SEPARATOR ' | '
+    GROUP_CONCAT(
+        CONCAT(
+            DATE_FORMAT(hd.fecha_cambio, '%d/%m/%Y'), 
+            ': ', 
+            IFNULL(hd.departamento_anterior, 'Nuevo ingreso'), 
+            ' → ', 
+            hd.departamento_nuevo
         ) 
-        FROM historial_departamentos h 
-        WHERE h.email_institucional = cp.email_institucional
+        ORDER BY hd.fecha_cambio DESC 
+        SEPARATOR ' | '
     ) AS historial_deptos
 FROM catalogo_personal cp
-LEFT JOIN documentos d ON cp.email_institucional = d.email_institucional
-GROUP BY cp.email_institucional, cp.id, cp.nombre, cp.puesto, cp.departamento_jud, cp.telefono, cp.extension
-ORDER BY cp.nombre";
+LEFT JOIN documentos d ON TRIM(cp.email_institucional) = TRIM(d.email_institucional)
+LEFT JOIN historial_departamentos hd ON cp.id = hd.personal_id
+GROUP BY cp.id, cp.email_institucional, cp.nombre, cp.puesto, cp.departamento_jud, cp.telefono, cp.extension
+ORDER BY cp.nombre ASC";
 
 $result = mysqli_query($conn, $query);
 
@@ -48,9 +48,14 @@ if (!$result) {
     die("Error en la consulta: " . mysqli_error($conn));
 }
 
-// NUEVO: Registro de diagnóstico
-file_put_contents('catalogo_debug.log', "\nConsulta ejecutada: ".date('Y-m-d H:i:s')."\n", FILE_APPEND);
-file_put_contents('catalogo_debug.log', "Número de registros: ".mysqli_num_rows($result)."\n", FILE_APPEND);
+// Registro de diagnóstico
+$debug_info = [
+    'fecha' => date('Y-m-d H:i:s'),
+    'registros' => mysqli_num_rows($result),
+    'consulta' => $query,
+    'error' => mysqli_error($conn)
+];
+file_put_contents('catalogo_debug.log', print_r($debug_info, true), FILE_APPEND);
 ?>
 
 <!-- [El resto del HTML permanece igual] -->

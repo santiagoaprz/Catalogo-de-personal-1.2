@@ -12,6 +12,16 @@ require 'auth_middleware.php';
 requireAuth();
 require 'database.php';
 
+function generarNumeroAutomatico() {
+    global $conn;
+    $query = "SELECT MAX(CAST(SUBSTRING(numero_empleado, 5) AS UNSIGNED)) as max_num FROM catalogo_personal";
+    $result = mysqli_query($conn, $query);
+    $row = mysqli_fetch_assoc($result);
+    $next_num = ($row['max_num'] ?? 0) + 1;
+    return 'EMP-' . str_pad($next_num, 5, '0', STR_PAD_LEFT);
+}
+
+
 // Obtener el próximo número de oficio
 $numero_oficio = "OF-00001"; // Valor por defecto
 $secuencia_query = "SELECT ultimo_numero FROM secuencia_oficios LIMIT 1";
@@ -22,9 +32,6 @@ if ($secuencia_row = mysqli_fetch_assoc($secuencia_result)) {
     $numero_oficio_usuario = mysqli_real_escape_string($conn, $_POST['numero_oficio_usuario'] ?? ''); 
 }
 
-function generarNumeroAutomatico() {
-    return 'EMP-' . str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
-}
 
 // Verificar autenticación
 if (!isset($_SESSION['user'])) {
@@ -33,13 +40,15 @@ if (!isset($_SESSION['user'])) {
 }
 
 // Obtener documentos recientes con consulta preparada
+// Obtener documentos recientes con consulta optimizada
 $query = "SELECT 
     d.id,
     d.numero_oficio,
     COALESCE(d.numero_oficio_usuario, d.numero_oficio) AS numero_oficio_mostrar,
     DATE_FORMAT(d.fecha_creacion, '%d/%m/%Y %H:%i') AS fecha_creacion_format,
     DATE_FORMAT(d.fecha_entrega, '%d/%m/%Y') AS fecha_entrega_format,
-    d.remitente,
+    IFNULL(cp.nombre, d.remitente) AS remitente,
+    d.numero_empleado,
     COALESCE(d.email_institucional, 'No especificado') AS email_institucional,
     d.jud_destino,
     d.asunto,
@@ -49,17 +58,16 @@ $query = "SELECT
     u.username AS registrado_por
 FROM documentos d
 LEFT JOIN usuarios u ON d.usuario_registra = u.id
+LEFT JOIN catalogo_personal cp ON TRIM(d.email_institucional) = TRIM(cp.email_institucional)
 WHERE d.remitente IS NOT NULL
 ORDER BY d.fecha_creacion DESC, d.id DESC
-LIMIT 50";
+LIMIT 200";
 
 $result = mysqli_query($conn, $query);
 
 if (!$result) {
     die("Error en la consulta: " . mysqli_error($conn));
 }
-
-$result = mysqli_query($conn, $query);
 
 // Obtener lista de departamentos JUD
 $jud_query = "SELECT nombre FROM jud_departamentos WHERE activo = TRUE ORDER BY nombre";
@@ -542,14 +550,14 @@ while ($row = mysqli_fetch_assoc($jud_result)) {
                         </tr>
                     </thead>
                     <tbody>
-                        <?php while ($row = mysqli_fetch_assoc($result)): ?>
-                        <tr>
-                            <td><?= htmlspecialchars($row['numero_oficio_usuario'] ?? 'N/A') ?></td>
-                            <td><?= htmlspecialchars($row['remitente']) ?></td>
-                            <td><?= htmlspecialchars($row['email_institucional']) ?></td>
-                            <td><?= htmlspecialchars($row['jud_destino']) ?></td>
-                            <td><?= htmlspecialchars($row['asunto']) ?></td>
-                            <td><?= htmlspecialchars($row['tipo']) ?></td>
+    <?php while ($row = mysqli_fetch_assoc($result)): ?>
+    <tr>
+        <td><?= htmlspecialchars($row['numero_oficio_mostrar'] ?? 'N/A') ?></td>
+        <td><?= htmlspecialchars($row['remitente']) ?></td>
+        <td><?= htmlspecialchars($row['email_institucional']) ?></td>
+        <td><?= htmlspecialchars($row['jud_destino']) ?></td>
+        <td><?= htmlspecialchars($row['asunto']) ?></td>
+        <td><?= htmlspecialchars($row['tipo']) ?></td>
                             <td>
                                 <span class="estatus-badge" style="background-color: <?= 
                                     $row['estatus'] === 'ATENDIDO' ? '#2ecc71' : 
