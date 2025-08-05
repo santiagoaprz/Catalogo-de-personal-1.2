@@ -11,6 +11,9 @@ require 'session_config.php';
 require 'auth_middleware.php';
 requireAuth();
 require 'database.php';
+if (!$conn) {
+    die("Error de conexión: " . mysqli_connect_error());
+}
 
 header("Cache-Control: no-cache, no-store, must-revalidate");
 header("Pragma: no-cache");
@@ -166,32 +169,44 @@ $total_registros = mysqli_num_rows($result);
                 </tr>
             </thead>
             <tbody>
-                <?php while ($row = mysqli_fetch_assoc($result)): ?>
-                <tr>
-                    <td><?= htmlspecialchars($row['id']) ?></td>
-                    <td><?= htmlspecialchars($row['numero_oficio_mostrar']) ?></td>
-                    <td><?= htmlspecialchars($row['remitente']) ?></td>
-                    <td><?= htmlspecialchars($row['email_institucional']) ?></td>
-                    <td><?= htmlspecialchars($row['numero_empleado']) ?></td>
-                    <td><?= htmlspecialchars($row['jud_destino']) ?></td>
-                    <td><?= htmlspecialchars(substr($row['asunto'], 0, 50)) ?><?= strlen($row['asunto']) > 50 ? '...' : '' ?></td>
-                    <td><?= htmlspecialchars($row['tipo']) ?></td>
-                    <td>
-                        <span class="estatus-badge estatus-<?= strtolower($row['estatus']) ?>">
-                            <?= htmlspecialchars($row['estatus']) ?>
-                        </span>
-                    </td>
-                    <td><?= htmlspecialchars($row['fecha_creacion_format']) ?></td>
-                    <td><?= htmlspecialchars($row['usuario_registro']) ?></td>
-                    <td>
-                        <?php if (!empty($row['pdf_url_completo'])): ?>
-                            <a href="<?= htmlspecialchars($row['pdf_url_completo']) ?>" target="_blank" class="pdf-link">Ver PDF</a>
-                        <?php else: ?>
-                            <span style="color: #999;">No disponible</span>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-                <?php endwhile; ?>
+    <?php while ($row = mysqli_fetch_assoc($result)): 
+        // Preprocesar datos
+        $numero_empleado = $row['numero_empleado'] ?? 'S/N';
+        $fecha_creacion = isset($row['fecha_creacion']) ? 
+            date('d/m/Y H:i', strtotime($row['fecha_creacion'])) : 'Sin fecha';
+        $pdf_url = isset($row['pdf_url']) ? '/SISTEMA_OFICIOS/pdfs/' . basename($row['pdf_url']) : '';
+    ?>
+    <tr>
+        <td><?= htmlspecialchars($row['id'] ?? '') ?></td>
+        <td><?= htmlspecialchars($row['numero_oficio_mostrar'] ?? '') ?></td>
+        <td><?= htmlspecialchars($row['remitente'] ?? '') ?></td>
+        <td><?= htmlspecialchars($row['email_institucional'] ?? '') ?></td>
+        <td><?= htmlspecialchars($numero_empleado) ?></td>
+        <td><?= htmlspecialchars($row['jud_destino'] ?? '') ?></td>
+        <td>
+            <?php 
+            $asunto = $row['asunto'] ?? '';
+            echo htmlspecialchars(mb_substr($asunto, 0, 50, 'UTF-8'));
+            echo mb_strlen($asunto, 'UTF-8') > 50 ? '...' : ''; 
+            ?>
+        </td>
+        <td><?= htmlspecialchars($row['tipo'] ?? '') ?></td>
+        <td>
+            <span class="estatus-badge estatus-<?= strtolower($row['estatus'] ?? '') ?>">
+                <?= htmlspecialchars($row['estatus'] ?? '') ?>
+            </span>
+        </td>
+        <td><?= htmlspecialchars($fecha_creacion) ?></td>
+        <td><?= htmlspecialchars($row['usuario_registro'] ?? '') ?></td>
+        <td>
+            <?php if (!empty($pdf_url)): ?>
+                <a href="<?= htmlspecialchars($pdf_url) ?>" target="_blank" class="pdf-link">Ver PDF</a>
+            <?php else: ?>
+                <span style="color: #999;">No disponible</span>
+            <?php endif; ?>
+        </td>
+    </tr>
+    <?php endwhile; ?>
             </tbody>
         </table>
     <?php endif; ?>

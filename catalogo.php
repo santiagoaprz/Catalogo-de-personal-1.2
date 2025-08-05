@@ -11,7 +11,9 @@ require 'session_config.php';
 require 'auth_middleware.php';
 requireAuth();
 require 'database.php';
-
+if (!$conn) {
+    die("Error de conexión: " . mysqli_connect_error());
+}
 // Configuración para GROUP_CONCAT
 mysqli_query($conn, "SET SESSION group_concat_max_len = 1000000;");
 

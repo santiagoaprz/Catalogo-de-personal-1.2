@@ -59,6 +59,7 @@ function migrarDatosCorregida($conn) {
         echo "Registros de historial actualizados: " . $conn->affected_rows . "\n";
         
         $conn->commit();
+        
         echo "Migración completada con éxito\n";
     } catch (Exception $e) {
         $conn->rollback();

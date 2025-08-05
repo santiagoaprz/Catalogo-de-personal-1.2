@@ -11,6 +11,9 @@ require 'session_config.php';
 require 'auth_middleware.php';
 requireAuth();
 require 'database.php';
+if (!$conn) {
+    die("Error de conexión: " . mysqli_connect_error());
+}
 
 function generarNumeroAutomatico() {
     global $conn;
@@ -39,16 +42,15 @@ if (!isset($_SESSION['user'])) {
     exit;
 }
 
-// Obtener documentos recientes con consulta preparada
-// Obtener documentos recientes con consulta optimizada
 $query = "SELECT 
     d.id,
-    d.numero_oficio,
+    d.numero_oficio AS numero_automatico,
+    d.numero_oficio_usuario AS numero_manual,
     COALESCE(d.numero_oficio_usuario, d.numero_oficio) AS numero_oficio_mostrar,
     DATE_FORMAT(d.fecha_creacion, '%d/%m/%Y %H:%i') AS fecha_creacion_format,
     DATE_FORMAT(d.fecha_entrega, '%d/%m/%Y') AS fecha_entrega_format,
     IFNULL(cp.nombre, d.remitente) AS remitente,
-    d.numero_empleado,
+    cp.numero_empleado,  -- Se usa siempre el número del catálogo
     COALESCE(d.email_institucional, 'No especificado') AS email_institucional,
     d.jud_destino,
     d.asunto,
@@ -58,7 +60,7 @@ $query = "SELECT
     u.username AS registrado_por
 FROM documentos d
 LEFT JOIN usuarios u ON d.usuario_registra = u.id
-LEFT JOIN catalogo_personal cp ON TRIM(d.email_institucional) = TRIM(cp.email_institucional)
+LEFT JOIN catalogo_personal cp ON TRIM(LOWER(cp.email_institucional)) = TRIM(LOWER(d.email_institucional))
 WHERE d.remitente IS NOT NULL
 ORDER BY d.fecha_creacion DESC, d.id DESC
 LIMIT 200";
